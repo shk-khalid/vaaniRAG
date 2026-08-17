@@ -111,9 +111,45 @@ def load_sample_df(parquet_url: str, num_rows: int = 500) -> pd.DataFrame:
         sys.exit(1)
 
 
+def flatten_to_canonical(row: Any) -> List[Dict[str, Any]]:
+    """
+    Converts a raw dataset record with nested passages into a list of canonical document dicts.
+    """
+    canonical_docs = []
+    query_id = row.get("query_id")
+    query_text = row.get("query")
+    language = row.get("target_lang")
+    
+    passages = row.get("passages")
+    if not isinstance(passages, dict):
+        return []
+        
+    translated_passages = passages.get("Translated_passages")
+    is_selected_list = passages.get("is_selected")
+    
+    if not hasattr(translated_passages, "__iter__") or isinstance(translated_passages, (str, bytes)):
+        return []
+        
+    for idx, text in enumerate(translated_passages):
+        is_sel = False
+        if is_selected_list is not None and idx < len(is_selected_list):
+            is_sel = bool(is_selected_list[idx])
+            
+        canonical_docs.append({
+            "document_id": f"{query_id}_p{idx}",
+            "query": query_text,
+            "language": language,
+            "text": text,
+            "is_selected": is_sel,
+            "source_passage_index": idx
+        })
+        
+    return canonical_docs
+
+
 def inspect_samples(df: pd.DataFrame, num_samples: int = 2) -> None:
     """
-    Displays a few representative examples from the loaded DataFrame.
+    Displays a few representative examples from the loaded DataFrame and their canonical formats.
     """
     print(f"\n[4/5] Displaying {num_samples} Representative Examples:")
     samples = df.head(num_samples)
@@ -137,6 +173,13 @@ def inspect_samples(df: pd.DataFrame, num_samples: int = 2) -> None:
                 if len(val_str) > 150:
                     val_str = val_str[:150] + "..."
                 print(f"  {col}: {val_str}")
+        
+        # Display canonical conversion preview
+        canonical = flatten_to_canonical(row)
+        if canonical:
+            print(f"\n  Mapped Canonical Document Preview (1 of {len(canonical)} generated):")
+            print(json.dumps(canonical[0], indent=4, ensure_ascii=False))
+
 
 
 def analyze_text_lengths(df: pd.DataFrame) -> None:

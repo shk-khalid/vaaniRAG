@@ -70,3 +70,20 @@ Based on a sample analysis of 500 validation records (representing 4,995 total p
 | **Passage (Indic words)** | 6 | 678 | 50.72 | 45.0 | 80.0 | 123.00 |
 | **Answer (Indic chars)** | 1 | 3379 | 75.15 | 26.0 | 137.1 | 350.22 |
 | **Answer (Indic words)** | 1 | 682 | 12.39 | 5.0 | 20.0 | 56.07 |
+
+### Canonical Document Format
+To prepare the dataset for the retrieval pipeline, the raw nested layout is mapped into a flat canonical format:
+
+```json
+{
+  "document_id": "1102432_p0",
+  "query": "কৰ্পোৰেচন কি?",
+  "language": "asm_Beng",
+  "text": "এটা কোম্পানী...",
+  "is_selected": false,
+  "source_passage_index": 0
+}
+```
+
+This flattening maps each index of `Translated_passages` to a unique `document_id` constructed from the `query_id` and the `source_passage_index`.
+
