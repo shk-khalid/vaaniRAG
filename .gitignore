@@ -40,3 +40,7 @@ data/*
 !data/.gitkeep
 .cache/
 huggingface_cache/
+
+# Environment Vars
+.env
+.env.*
