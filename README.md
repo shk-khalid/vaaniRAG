@@ -120,4 +120,33 @@ If the cluster URL starts with the placeholder `https://your-cluster-url` or is 
    python ingestion/benchmark_qdrant.py --collection vaani_rag
    ```
 
+---
+
+## Phase 5: FastAPI Backend REST API Service
+
+We have implemented a production-grade FastAPI REST API service in the [`backend/`](file:///Users/earth-616/Projects/vaaniRAG/backend) directory to orchestrate VaaniRAG's embedding generation, vector search, and cross-encoder reranking.
+
+### API Endpoints
+- **`GET /health`**: Returns API status.
+- **`POST /api/v1/rag/query`**: Orchestrates query processing. Accepts a query (with optional target language filters), generates embeddings via BGE-M3, queries Qdrant, reranks retrieved passages with a Cross-Encoder, and returns the top 3 items along with a microsecond-level latency breakdown.
+
+### How to Run the Backend Service
+
+Start the development server using `uvicorn`:
+```bash
+.venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+You can test the endpoints using `curl` or any API client:
+```bash
+# Health Check
+curl -X GET http://localhost:8000/health
+
+# Retrieval Request
+curl -X POST http://localhost:8000/api/v1/rag/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "কৰ্পোৰেচন কি?", "filter_language": false}'
+```
+
+
 
