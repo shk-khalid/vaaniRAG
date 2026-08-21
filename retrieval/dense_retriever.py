@@ -31,24 +31,26 @@ class QdrantDenseRetriever:
             print("Loading SentenceTransformer model 'BAAI/bge-m3' in dense retriever...")
             self.model = SentenceTransformer("BAAI/bge-m3")
 
-    def search(
-        self,
-        query_text: str,
-        k: int = 10,
-        language_filter: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def embed_query(self, query_text: str) -> List[float]:
         """
-        Encodes query_text and retrieves the top k matching chunks from Qdrant.
-        Optionally filters results by language stored in payload metadata.
+        Generates BGE-M3 dense query embedding vector.
         """
-        # 1. Encode query
-        query_vector = self.model.encode(
+        return self.model.encode(
             [query_text],
             normalize_embeddings=True,
             show_progress_bar=False
         )[0].tolist()
 
-        # 2. Build filter conditions if language_filter is specified
+    def search_vector(
+        self,
+        query_vector: List[float],
+        k: int = 10,
+        language_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Searches Qdrant using a precomputed query vector.
+        """
+        # 1. Build filter conditions if language_filter is specified
         query_filter = None
         if language_filter:
             query_filter = models.Filter(
@@ -60,7 +62,7 @@ class QdrantDenseRetriever:
                 ]
             )
 
-        # 3. Perform Qdrant Vector search
+        # 2. Perform Qdrant Vector search
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
@@ -69,7 +71,7 @@ class QdrantDenseRetriever:
         )
         hits = response.points
 
-        # 4. Format outputs
+        # 3. Format outputs
         results = []
         for hit in hits:
             payload = hit.payload
@@ -84,3 +86,16 @@ class QdrantDenseRetriever:
             })
             
         return results
+
+    def search(
+        self,
+        query_text: str,
+        k: int = 10,
+        language_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Encodes query_text and retrieves the top k matching chunks from Qdrant.
+        Optionally filters results by language stored in payload metadata.
+        """
+        query_vector = self.embed_query(query_text)
+        return self.search_vector(query_vector, k=k, language_filter=language_filter)

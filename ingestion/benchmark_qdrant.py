@@ -4,13 +4,16 @@ benchmark_qdrant.py
 
 Evaluates the dense retrieval performance of the Qdrant backend (local or cloud)
 across all 400 queries, reporting Recall@1, Recall@5, Recall@10, and MRR.
+Sweeps different values of k (5, 10, 20) to compare accuracy and network latency.
 """
 
 import os
 import sys
 import argparse
 import json
+import time
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Any, Set
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +50,7 @@ def calculate_recall(retrieved_documents: List[str], relevant_documents: Set[str
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Qdrant retrieval performance.")
     parser.add_argument("--collection", type=str, default=QDRANT_COLLECTION, help="Qdrant collection to evaluate")
+    parser.add_argument("--filter-language", action="store_true", help="Apply target language filter to vector search payload")
     args = parser.parse_args()
 
     queries_path = "data/evaluation_queries.jsonl"
@@ -56,81 +60,114 @@ def main():
     print("\nInitializing QdrantDenseRetriever (will load BGE-M3 model)...")
     retriever = QdrantDenseRetriever(collection_name=args.collection)
 
-    print("\nEvaluating dense retrieval performance against Qdrant backend...")
+    # 1. Precompute BGE-M3 embeddings for all 400 queries to speed up execution
+    print("\nPre-computing query embeddings using BGE-M3...")
+    start_embed_all = time.perf_counter()
     
-    recall_counts = {1: 0.0, 5: 0.0, 10: 0.0}
-    total_mrr = 0.0
+    query_vectors = []
+    embed_latencies = []
     
-    # Track per-language performance
-    languages = sorted(list(set(q["language"] for q in queries)))
-    lang_recall_counts = {lang: {1: 0.0, 5: 0.0, 10: 0.0} for lang in languages}
-    lang_total_mrr = {lang: 0.0 for lang in languages}
-    lang_counts = {lang: 0 for lang in languages}
-
-    for idx, query in enumerate(queries):
-        lang = query["language"]
-        relevant_docs = set(query["relevant_document_ids"])
-        lang_counts[lang] += 1
-
-        # Search Qdrant for top matches (fetch top 20 to allow unique document extraction)
-        hits = retriever.search(query["query"], k=20)
+    for query in queries:
+        start_emb = time.perf_counter()
+        vector = retriever.embed_query(query["query"])
+        end_emb = time.perf_counter()
+        query_vectors.append(vector)
+        embed_latencies.append((end_emb - start_emb) * 1000)
         
-        # Deduplicate retrieved parent document IDs
-        retrieved_docs = []
-        seen = set()
-        for hit in hits:
-            doc_id = hit["document_id"]
-            if doc_id not in seen:
-                seen.add(doc_id)
-                retrieved_docs.append(doc_id)
+    end_embed_all = time.perf_counter()
+    print(f"Pre-encoded {len(queries)} queries in {end_embed_all - start_embed_all:.2f} seconds.")
 
-        # Compute metrics
-        for k in [1, 5, 10]:
-            rec_val = calculate_recall(retrieved_docs, relevant_docs, k)
-            recall_counts[k] += rec_val
-            lang_recall_counts[lang][k] += rec_val
+    # Show query embedding generation latency
+    p50_emb = np.percentile(embed_latencies, 50)
+    p70_emb = np.percentile(embed_latencies, 70)
+    p95_emb = np.percentile(embed_latencies, 95)
+    p100_emb = np.max(embed_latencies)
+    print("\n========================================================")
+    print("        Query Embedding Latency Statistics")
+    print("========================================================")
+    print(f"  P50 (Median): {p50_emb:.2f} ms")
+    print(f"  P70:          {p70_emb:.2f} ms")
+    print(f"  P95:          {p95_emb:.2f} ms")
+    print(f"  P100 (Max):   {p100_emb:.2f} ms")
 
-        mrr_val = calculate_mrr(retrieved_docs, relevant_docs)
-        total_mrr += mrr_val
-        lang_total_mrr[lang] += mrr_val
+    # 2. Sweep different K values for Qdrant retrieval
+    k_values = [5, 10, 20]
+    sweep_results = []
+    latency_results = []
 
-        if (idx + 1) % 50 == 0 or (idx + 1) == len(queries):
-            print(f"  Processed {idx + 1}/{len(queries)} queries...")
+    for k in k_values:
+        print(f"\nEvaluating Qdrant Search Sweep with K = {k} (Language filtering: {args.filter_language})...")
+        
+        recall_counts = {1: 0.0, 5: 0.0, 10: 0.0}
+        total_mrr = 0.0
+        qdrant_latencies = []
+        
+        for idx, query in enumerate(queries):
+            lang = query["language"]
+            relevant_docs = set(query["relevant_document_ids"])
+            query_vector = query_vectors[idx]
 
-    # Format reports
-    num_queries = len(queries)
-    
-    overall_results = [{
-        "Retriever": "QDRANT DENSE",
-        "R@1": round(recall_counts[1] / num_queries, 4),
-        "R@5": round(recall_counts[5] / num_queries, 4),
-        "R@10": round(recall_counts[10] / num_queries, 4),
-        "MRR": round(total_mrr / num_queries, 4)
-    }]
+            # Measure Qdrant Search Latency
+            lang_filter = lang if args.filter_language else None
+            start_qdrant = time.perf_counter()
+            hits = retriever.search_vector(query_vector, k=k, language_filter=lang_filter)
+            end_qdrant = time.perf_counter()
+            
+            qdrant_ms = (end_qdrant - start_qdrant) * 1000
+            qdrant_latencies.append(qdrant_ms)
+            
+            # Deduplicate retrieved parent document IDs
+            retrieved_docs = []
+            seen = set()
+            for hit in hits:
+                doc_id = hit["document_id"]
+                if doc_id not in seen:
+                    seen.add(doc_id)
+                    retrieved_docs.append(doc_id)
 
-    lang_results = []
-    for lang in languages:
-        count = lang_counts[lang]
-        if count > 0:
-            lang_results.append({
-                "Language": lang.upper(),
-                "R@1": round(lang_recall_counts[lang][1] / count, 4),
-                "R@5": round(lang_recall_counts[lang][5] / count, 4),
-                "R@10": round(lang_recall_counts[lang][10] / count, 4),
-                "MRR": round(lang_total_mrr[lang] / count, 4)
-            })
+            # Compute metrics (Recall@1, @5, @10 and MRR)
+            for eval_k in [1, 5, 10]:
+                recall_counts[eval_k] += calculate_recall(retrieved_docs, relevant_docs, eval_k)
+
+            mrr_val = calculate_mrr(retrieved_docs, relevant_docs)
+            total_mrr += mrr_val
+
+        # Record overall accuracy metrics for this K
+        num_queries = len(queries)
+        sweep_results.append({
+            "K Depth": k,
+            "R@1": round(recall_counts[1] / num_queries, 4),
+            "R@5": round(recall_counts[5] / num_queries, 4),
+            "R@10": round(recall_counts[10] / num_queries, 4),
+            "MRR": round(total_mrr / num_queries, 4)
+        })
+
+        # Calculate search latency percentiles for this K
+        p50_qd = np.percentile(qdrant_latencies, 50)
+        p70_qd = np.percentile(qdrant_latencies, 70)
+        p95_qd = np.percentile(qdrant_latencies, 95)
+        p100_qd = np.max(qdrant_latencies)
+        
+        latency_results.append({
+            "K Depth": k,
+            "P50 (ms)": round(p50_qd, 2),
+            "P70 (ms)": round(p70_qd, 2),
+            "P95 (ms)": round(p95_qd, 2),
+            "P100 (Max ms)": round(p100_qd, 2)
+        })
+
+    # Print final comparison reports
+    print("\n========================================================")
+    print("        Retrieval Accuracy Comparative Sweep")
+    print("========================================================")
+    df_acc = pd.DataFrame(sweep_results)
+    print(df_acc.to_string(index=False))
 
     print("\n========================================================")
-    print(f"        Qdrant Dense Retrieval OVERALL Performance")
+    print("        Qdrant Search Latency Comparative Sweep")
     print("========================================================")
-    df_overall = pd.DataFrame(overall_results)
-    print(df_overall.to_string(index=False))
-
-    print("\n========================================================")
-    print(f"        Qdrant Dense Retrieval PER-LANGUAGE Performance")
-    print("========================================================")
-    df_lang = pd.DataFrame(lang_results)
-    print(df_lang.to_string(index=False))
+    df_lat = pd.DataFrame(latency_results)
+    print(df_lat.to_string(index=False))
 
 
 if __name__ == "__main__":

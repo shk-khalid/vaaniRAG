@@ -31,7 +31,7 @@ def get_qdrant_client() -> QdrantClient:
     else:
         print(f"Connecting to Qdrant Cloud Cluster: {QDRANT_URL}")
         api_key = QDRANT_API_KEY if QDRANT_API_KEY != "your_api_key" else None
-        return QdrantClient(url=QDRANT_URL, api_key=api_key)
+        return QdrantClient(url=QDRANT_URL, api_key=api_key, timeout=60.0)
 
 
 def init_collection(client: QdrantClient, collection_name: str, vector_size: int = 1024) -> None:
