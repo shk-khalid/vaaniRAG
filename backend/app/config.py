@@ -13,3 +13,6 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 QDRANT_URL = os.getenv("QDRANT_URL", "")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "vaani_rag")
+
+# Hugging Face Configuration
+HF_TOKEN = os.getenv("HF_TOKEN", "")
