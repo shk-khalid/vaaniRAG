@@ -87,3 +87,37 @@ To prepare the dataset for the retrieval pipeline, the raw nested layout is mapp
 
 This flattening maps each index of `Translated_passages` to a unique `document_id` constructed from the `query_id` and the `source_passage_index`.
 
+---
+
+## Phase 3: Qdrant DB Integration and Dense Retrieval
+
+We have integrated Qdrant as the vector database storage and retrieval layer for VaaniRAG. 
+
+### Database Connection and Fallback
+The client connection in [`retrieval/qdrant_client.py`](file:///Users/earth-616/Projects/vaaniRAG/retrieval/qdrant_client.py) reads connection parameters from the `.env` file:
+- `QDRANT_URL`
+- `QDRANT_API_KEY`
+- `QDRANT_COLLECTION`
+
+If the cluster URL starts with the placeholder `https://your-cluster-url` or is left empty, the connection dynamically falls back to a **local file-backed database** stored at `data/qdrant_db/`, allowing offline testing and persistence without running local Docker containers.
+
+### How to Run Ingestion & Retrieval Verification
+
+1. **Upload Chunks and Embeddings to Qdrant:**
+   ```bash
+   python ingestion/index_qdrant.py --strategy adaptive
+   ```
+
+2. **Verify Retrieval Manually:**
+   Perform a dense vector search query directly against your collection:
+   ```bash
+   python ingestion/test_qdrant_retrieval.py --query "কৰ্পোৰেচন কি?"
+   ```
+
+3. **Run the Qdrant Dense Retrieval Benchmark:**
+   Evaluate retrieval performance over all 400 queries using the Qdrant collection:
+   ```bash
+   python ingestion/benchmark_qdrant.py --collection vaani_rag
+   ```
+
+
