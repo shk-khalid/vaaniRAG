@@ -1,9 +1,10 @@
 import os
 import sys
 import time
-import requests
+import numpy as np
 from typing import Dict, Any, Optional, List
 from qdrant_client.http import models
+from huggingface_hub import InferenceClient
 
 # Add workspace paths to import existing modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -17,27 +18,24 @@ class APIQdrantDenseRetriever:
     for BGE-M3 embeddings and Qdrant Cloud. Requires NO local model loading.
     """
 
-    def __init__(self, collection_name: str, client=None):
+    def __init__(self, collection_name: str, hf_client: InferenceClient, client=None):
         self.collection_name = collection_name
+        self.hf_client = hf_client
         self.client = client if client else get_qdrant_client()
 
     def embed_query(self, query_text: str) -> List[float]:
         """
-        Sends the query to Hugging Face Serverless API for BGE-M3 embedding generation.
+        Generates query embedding vector using Hugging Face InferenceClient.
         """
-        url = "https://api-inference.huggingface.co/models/BAAI/bge-m3"
-        headers = {
-            "Authorization": f"Bearer {config.HF_TOKEN}",
-            "x-wait-for-model": "true"
-        }
+        # Call serverless feature extraction
+        res = self.hf_client.feature_extraction(
+            text=query_text,
+            model="BAAI/bge-m3"
+        )
         
-        response = requests.post(url, headers=headers, json={"inputs": query_text})
-        response.raise_for_status()
-        
-        res_data = response.json()
-        if isinstance(res_data, list) and len(res_data) > 0 and isinstance(res_data[0], list):
-            return res_data[0]
-        return res_data
+        # Safely convert output to a flat 1D python float list (handles numpy array outputs)
+        query_vector = np.array(res).flatten().tolist()
+        return query_vector
 
     def search_vector(
         self,
@@ -92,6 +90,9 @@ class APICrossEncoderReranker:
     Requires NO local model loading.
     """
 
+    def __init__(self, hf_client: InferenceClient):
+        self.hf_client = hf_client
+
     def rerank(self, query: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
         Sends query-candidate pairs to Hugging Face Serverless API for MiniLM reranking.
@@ -99,23 +100,12 @@ class APICrossEncoderReranker:
         if not candidates:
             return []
 
-        url = "https://api-inference.huggingface.co/models/cross-encoder/ms-marco-MiniLM-L-6-v2"
-        headers = {
-            "Authorization": f"Bearer {config.HF_TOKEN}",
-            "x-wait-for-model": "true"
-        }
-        
-        # Hugging Face sentence-similarity endpoint payload format
-        payload = {
-            "inputs": {
-                "source_sentence": query,
-                "sentences": [c["text"] for c in candidates]
-            }
-        }
-        
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        scores = response.json()
+        # sentence_similarity receives the main query string and a list of alternative candidate sentences
+        scores = self.hf_client.sentence_similarity(
+            sentence=query,
+            other_sentences=[c["text"] for c in candidates],
+            model="cross-encoder/ms-marco-MiniLM-L-6-v2"
+        )
 
         # Handle API response mapping
         reranked = []
@@ -136,13 +126,14 @@ class SearchService:
     """
 
     def __init__(self):
+        self.hf_client: Optional[InferenceClient] = None
         self.retriever: Optional[APIQdrantDenseRetriever] = None
         self.reranker: Optional[APICrossEncoderReranker] = None
         self.initialized = False
 
     def initialize(self):
         """
-        Initializes database connections. Call on app startup.
+        Initializes database connections and Inference API clients. Call on app startup.
         """
         if self.initialized:
             return
@@ -151,11 +142,15 @@ class SearchService:
         # Ensure we import get_qdrant_client dynamically
         from retrieval.qdrant_client import get_qdrant_client
 
+        # Initialize Hugging Face InferenceClient
+        self.hf_client = InferenceClient(api_key=config.HF_TOKEN)
+
         # Create API-driven clients
         self.retriever = APIQdrantDenseRetriever(
-            collection_name=config.QDRANT_COLLECTION
+            collection_name=config.QDRANT_COLLECTION,
+            hf_client=self.hf_client
         )
-        self.reranker = APICrossEncoderReranker()
+        self.reranker = APICrossEncoderReranker(hf_client=self.hf_client)
         
         self.initialized = True
         print("SearchService initialized successfully.")
