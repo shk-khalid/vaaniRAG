@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import requests
 import numpy as np
 from typing import Dict, Any, Optional, List
 from qdrant_client.http import models
@@ -86,26 +87,35 @@ class APIQdrantDenseRetriever:
 
 class APICrossEncoderReranker:
     """
-    API-driven cross-encoder reranker that communicates with Hugging Face Serverless API.
+    API-driven cross-encoder reranker that communicates directly with the Hugging Face Serverless API router.
     Requires NO local model loading.
     """
 
-    def __init__(self, hf_client: InferenceClient):
-        self.hf_client = hf_client
-
     def rerank(self, query: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
-        Sends query-candidate pairs to Hugging Face Serverless API for MiniLM reranking.
+        Sends query-candidate pairs directly to Hugging Face Serverless API router for MiniLM reranking.
         """
         if not candidates:
             return []
 
-        # sentence_similarity receives the main query string and a list of alternative candidate sentences
-        scores = self.hf_client.sentence_similarity(
-            sentence=query,
-            other_sentences=[c["text"] for c in candidates],
-            model="cross-encoder/ms-marco-MiniLM-L-6-v2"
-        )
+        # Bypass SDK task providers logic and query the active router URL directly
+        url = "https://router.huggingface.co/hf-inference/models/cross-encoder/ms-marco-MiniLM-L-6-v2"
+        headers = {
+            "Authorization": f"Bearer {config.HF_TOKEN}",
+            "x-wait-for-model": "true"
+        }
+        
+        # Hugging Face sentence-similarity endpoint payload format
+        payload = {
+            "inputs": {
+                "source_sentence": query,
+                "sentences": [c["text"] for c in candidates]
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        scores = response.json()
 
         # Handle API response mapping
         reranked = []
@@ -142,7 +152,7 @@ class SearchService:
         # Ensure we import get_qdrant_client dynamically
         from retrieval.qdrant_client import get_qdrant_client
 
-        # Initialize Hugging Face InferenceClient
+        # Initialize Hugging Face InferenceClient (uses the router)
         self.hf_client = InferenceClient(api_key=config.HF_TOKEN)
 
         # Create API-driven clients
@@ -150,7 +160,7 @@ class SearchService:
             collection_name=config.QDRANT_COLLECTION,
             hf_client=self.hf_client
         )
-        self.reranker = APICrossEncoderReranker(hf_client=self.hf_client)
+        self.reranker = APICrossEncoderReranker()
         
         self.initialized = True
         print("SearchService initialized successfully.")
