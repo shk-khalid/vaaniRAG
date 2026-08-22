@@ -88,46 +88,47 @@ class APIQdrantDenseRetriever:
 class APICrossEncoderReranker:
     """
     API-driven cross-encoder reranker that communicates directly with the Hugging Face Serverless API router.
-    Requires NO local model loading.
+    Uses the active BAAI/bge-reranker-v2-m3 model.
     """
 
     def rerank(self, query: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
-        Sends query-candidate pairs directly to Hugging Face Serverless API router for MiniLM reranking.
+        Sends query-candidate pairs to Hugging Face Serverless API router for BGE Reranker scoring.
         """
         if not candidates:
             return []
 
-        # Bypass SDK task providers logic and query the active router URL directly
-        url = "https://router.huggingface.co/hf-inference/models/cross-encoder/ms-marco-MiniLM-L-6-v2"
+        url = "https://router.huggingface.co/hf-inference/models/BAAI/bge-reranker-v2-m3"
         headers = {
             "Authorization": f"Bearer {config.HF_TOKEN}",
             "x-wait-for-model": "true"
         }
         
-        # Standard Cross-Encoder sentence pair format: {"inputs": [[query, doc1], [query, doc2], ...]}
+        # Standard classification pipeline schema for text pairs on HF Inference API
         payload = {
-            "inputs": [[query, c["text"]] for c in candidates]
+            "inputs": [
+                {"text": query, "text_pair": c["text"]}
+                for c in candidates
+            ]
         }
         
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         raw_scores = response.json()
 
-        # Handle API response mapping (could be list of floats or nested lists of label/score dicts)
+        # BGE-Reranker returns list of list of dicts: [[{"label": "LABEL_0", "score": 0.95}, ...]]
+        # corresponding to inputs in order.
+        if isinstance(raw_scores, list) and len(raw_scores) > 0 and isinstance(raw_scores[0], list):
+            raw_scores = raw_scores[0]
+
+        # Handle API response mapping
         reranked = []
         for idx, item in enumerate(raw_scores):
             score_val = 0.0
-            
-            # 1. Parse standard list of floats format: [0.95, 0.42, ...]
-            if isinstance(item, (int, float)):
-                score_val = float(item)
-            # 2. Parse nested classification labels format: [[{"label": "LABEL_0", "score": 0.95}], ...]
-            elif isinstance(item, list) and len(item) > 0 and isinstance(item[0], dict):
-                score_val = float(item[0].get("score", 0.0))
-            # 3. Parse dictionary format: [{"score": 0.95}, ...]
-            elif isinstance(item, dict):
+            if isinstance(item, dict):
                 score_val = float(item.get("score", 0.0))
+            elif isinstance(item, (int, float)):
+                score_val = float(item)
 
             cand_copy = dict(candidates[idx])
             cand_copy["rerank_score"] = score_val
