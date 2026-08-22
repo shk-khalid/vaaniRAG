@@ -3,19 +3,18 @@ import sys
 import time
 import requests
 from typing import Dict, Any, Optional, List
+from qdrant_client.http import models
 
 # Add workspace paths to import existing modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-from retrieval.dense_retriever import QdrantDenseRetriever
-from retrieval.reranker import CrossEncoderReranker
 from retrieval.qdrant_client import get_qdrant_client
 from backend.app import config
 
 
-class APIQdrantDenseRetriever(QdrantDenseRetriever):
+class APIQdrantDenseRetriever:
     """
-    Subclass of QdrantDenseRetriever that delegates embedding generation
-    to the Hugging Face Serverless Inference API instead of loading the model locally.
+    API-driven dense retriever that communicates with Hugging Face Serverless API 
+    for BGE-M3 embeddings and Qdrant Cloud. Requires NO local model loading.
     """
 
     def __init__(self, collection_name: str, client=None):
@@ -40,15 +39,58 @@ class APIQdrantDenseRetriever(QdrantDenseRetriever):
             return res_data[0]
         return res_data
 
+    def search_vector(
+        self,
+        query_vector: List[float],
+        k: int = 10,
+        language_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Queries the Qdrant database using the query vector.
+        """
+        # 1. Build filter conditions if language_filter is specified
+        query_filter = None
+        if language_filter:
+            query_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="language",
+                        match=models.MatchValue(value=language_filter)
+                    )
+                ]
+            )
 
-class APICrossEncoderReranker(CrossEncoderReranker):
-    """
-    Subclass of CrossEncoderReranker that delegates passage scoring
-    to the Hugging Face Serverless Inference API instead of loading the model locally.
-    """
+        # 2. Perform Qdrant Vector search
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            query_filter=query_filter,
+            limit=k
+        )
+        hits = response.points
 
-    def __init__(self):
-        pass
+        # 3. Format outputs
+        results = []
+        for hit in hits:
+            payload = hit.payload
+            results.append({
+                "chunk_id": payload.get("chunk_id"),
+                "document_id": payload.get("document_id"),
+                "query_id": payload.get("query_id"),
+                "text": payload.get("text"),
+                "language": payload.get("language"),
+                "is_selected": bool(payload.get("is_selected", False)),
+                "score": float(hit.score)
+            })
+            
+        return results
+
+
+class APICrossEncoderReranker:
+    """
+    API-driven cross-encoder reranker that communicates with Hugging Face Serverless API.
+    Requires NO local model loading.
+    """
 
     def rerank(self, query: str, candidates: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
